@@ -3,7 +3,8 @@ import multer from 'multer';
 import OpenAI from 'openai';
 import fs from 'fs';
 import path from 'path';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 
@@ -89,8 +90,8 @@ router.post('/upload', authMiddleware, upload.single('audio'), async (req: AuthR
       },
     });
 
-    // Step 4: Process in background (don't await)
-    processRecordingInBackground(recording.id, audioFilePath, fileName).catch((error) => {
+    // Step 4: Process in background using presigned URL (don't await)
+    processRecordingInBackground(recording.id, fileName).catch((error) => {
       console.error('Background processing failed:', error);
     });
 
@@ -117,7 +118,7 @@ router.post('/upload', authMiddleware, upload.single('audio'), async (req: AuthR
 });
 
 // Background processing function
-async function processRecordingInBackground(recordingId: string, audioFilePath: string, fileName: string) {
+async function processRecordingInBackground(recordingId: string, fileName: string) {
   try {
     // Update status to processing
     await prisma.recording.update({
@@ -127,16 +128,19 @@ async function processRecordingInBackground(recordingId: string, audioFilePath: 
 
     console.log(`Processing recording ${recordingId}...`);
 
-    // Download from R2 for transcription
-    const tempPath = path.join('uploads', `temp-${fileName}`);
+    // Generate presigned URL from R2
+    const command = new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: fileName,
+    });
 
-    // For now, we'll skip re-downloading and use the original path if available
-    // In production, you'd download from R2 here
+    const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 }); // 1 hour
+    console.log('Generated presigned URL for transcription');
 
-    // Transcribe audio
+    // Transcribe audio using presigned URL
     console.log('Transcribing audio...');
     const transcription = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(tempPath),
+      file: await fetch(presignedUrl).then(r => r.blob()) as any,
       model: 'whisper-1',
     });
 
@@ -176,11 +180,6 @@ async function processRecordingInBackground(recordingId: string, audioFilePath: 
     });
 
     console.log(`Recording ${recordingId} processed successfully`);
-
-    // Clean up temp file
-    if (fs.existsSync(tempPath)) {
-      fs.unlinkSync(tempPath);
-    }
 
   } catch (error: any) {
     console.error(`Failed to process recording ${recordingId}:`, error);
