@@ -3,8 +3,7 @@ import multer from 'multer';
 import OpenAI from 'openai';
 import fs from 'fs';
 import path from 'path';
-import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { PrismaClient } from '@prisma/client';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 
@@ -74,9 +73,6 @@ router.post('/upload', authMiddleware, upload.single('audio'), async (req: AuthR
     recordingId = recording.id;
     console.log('Recording saved with status: uploaded');
 
-    // Clean up temp file immediately
-    fs.unlinkSync(audioFilePath);
-
     // Step 3: Return immediately with upload confirmation
     res.json({
       success: true,
@@ -90,8 +86,8 @@ router.post('/upload', authMiddleware, upload.single('audio'), async (req: AuthR
       },
     });
 
-    // Step 4: Process in background using presigned URL (don't await)
-    processRecordingInBackground(recording.id, fileName).catch((error) => {
+    // Step 4: Process in background - keep temp file for processing (don't await)
+    processRecordingInBackground(recording.id, audioFilePath).catch((error) => {
       console.error('Background processing failed:', error);
     });
 
@@ -118,7 +114,7 @@ router.post('/upload', authMiddleware, upload.single('audio'), async (req: AuthR
 });
 
 // Background processing function
-async function processRecordingInBackground(recordingId: string, fileName: string) {
+async function processRecordingInBackground(recordingId: string, audioFilePath: string) {
   try {
     // Update status to processing
     await prisma.recording.update({
@@ -128,19 +124,15 @@ async function processRecordingInBackground(recordingId: string, fileName: strin
 
     console.log(`Processing recording ${recordingId}...`);
 
-    // Generate presigned URL from R2
-    const command = new GetObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Key: fileName,
-    });
+    // Check if file exists
+    if (!fs.existsSync(audioFilePath)) {
+      throw new Error(`Audio file not found: ${audioFilePath}`);
+    }
 
-    const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 }); // 1 hour
-    console.log('Generated presigned URL for transcription');
-
-    // Transcribe audio using presigned URL
+    // Transcribe audio using file stream
     console.log('Transcribing audio...');
     const transcription = await openai.audio.transcriptions.create({
-      file: await fetch(presignedUrl).then(r => r.blob()) as any,
+      file: fs.createReadStream(audioFilePath),
       model: 'whisper-1',
     });
 
@@ -181,6 +173,12 @@ async function processRecordingInBackground(recordingId: string, fileName: strin
 
     console.log(`Recording ${recordingId} processed successfully`);
 
+    // Clean up temp file after successful processing
+    if (fs.existsSync(audioFilePath)) {
+      fs.unlinkSync(audioFilePath);
+      console.log(`Deleted temp file: ${audioFilePath}`);
+    }
+
   } catch (error: any) {
     console.error(`Failed to process recording ${recordingId}:`, error);
 
@@ -189,6 +187,12 @@ async function processRecordingInBackground(recordingId: string, fileName: strin
       where: { id: recordingId },
       data: { status: 'failed' },
     }).catch(console.error);
+
+    // Clean up temp file even on failure
+    if (fs.existsSync(audioFilePath)) {
+      fs.unlinkSync(audioFilePath);
+      console.log(`Deleted temp file after error: ${audioFilePath}`);
+    }
   }
 }
 
