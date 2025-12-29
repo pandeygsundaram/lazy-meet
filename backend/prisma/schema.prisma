@@ -1,0 +1,43 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  recordings Recording[]
+
+  @@map("users")
+}
+
+model Recording {
+  id             String   @id @default(uuid())
+  userId         String
+  title          String
+  summary        String?  @db.Text
+  transcription  String?  @db.Text
+  audioUrl       String
+  duration       Int      // in seconds
+  status         String   @default("uploaded") // uploaded, processing, processed, failed
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("recordings")
+  @@index([userId])
+}
