@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
-import { View, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useAudioPlayer } from 'expo-audio';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { getRecordingById, type Recording } from '@/utils/storage';
-import { API_CONFIG } from '@/constants/config';
+import { getRecordingById, updateRecording, generateTitle, type Recording } from '@/utils/storage';
+import { API_CONFIG, API_ENDPOINTS } from '@/constants/config';
 
 export default function RecordingDetailModal() {
   const colorScheme = useColorScheme();
@@ -19,6 +20,7 @@ export default function RecordingDetailModal() {
   const [audioUrl, setAudioUrl] = useState<string>('');
   const player = useAudioPlayer(audioUrl);
   const [showFullTranscription, setShowFullTranscription] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   useEffect(() => {
     loadRecording();
@@ -66,11 +68,65 @@ export default function RecordingDetailModal() {
     });
   };
 
+  const sendToServer = async () => {
+    if (!recording) return;
+
+    setIsProcessing(true);
+    try {
+      console.log('Sending recording to server...');
+      console.log('Audio URL:', recording.audioUrl);
+
+      const formData = new FormData();
+      formData.append('audio', {
+        uri: recording.audioUrl,
+        type: 'audio/m4a',
+        name: 'recording.m4a',
+      } as any);
+
+      const response = await fetch(API_ENDPOINTS.TRANSCRIBE, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      const data = await response.json();
+      console.log('Server response:', data);
+
+      if (data.success) {
+        // Update the recording with transcription and summary
+        await updateRecording(recordingId, {
+          title: generateTitle(data.transcription),
+          summary: data.summary,
+          transcription: data.transcription,
+          audioUrl: data.audioUrl || recording.audioUrl,
+        });
+
+        // Reload the recording to show updated data
+        await loadRecording();
+
+        Alert.alert('Success!', 'Recording processed successfully');
+      } else {
+        throw new Error(data.error || 'Failed to process recording');
+      }
+    } catch (err) {
+      console.error('Failed to process recording:', err);
+      Alert.alert('Error', `Failed to process recording: ${err}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const isPending = recording?.summary === 'Processing...' || recording?.transcription === 'Transcription pending...';
+
   if (!recording) {
     return (
-      <ThemedView className="flex-1 items-center justify-center">
-        <ThemedText>Loading...</ThemedText>
-      </ThemedView>
+      <SafeAreaView style={{ flex: 1, backgroundColor: Colors[colorScheme ?? 'light'].background }} edges={['top', 'left', 'right', 'bottom']}>
+        <ThemedView className="flex-1 items-center justify-center">
+          <ThemedText>Loading...</ThemedText>
+        </ThemedView>
+      </SafeAreaView>
     );
   }
 
@@ -79,9 +135,10 @@ export default function RecordingDetailModal() {
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <ThemedView className="flex-1">
-      {/* Header */}
-      <View className="pt-16 pb-4 px-6 flex-row items-center justify-between">
+    <SafeAreaView style={{ flex: 1, backgroundColor: Colors[colorScheme ?? 'light'].background }} edges={['top', 'left', 'right']}>
+      <ThemedView className="flex-1">
+        {/* Header */}
+        <View className="pb-4 px-6 flex-row items-center justify-between">
         <TouchableOpacity
           onPress={() => router.back()}
           className="flex-row items-center gap-2"
@@ -233,7 +290,40 @@ export default function RecordingDetailModal() {
             </View>
           )}
         </View>
+
+        {/* Process with AI Button */}
+        {isPending && (
+          <View className="mb-8">
+            <TouchableOpacity
+              onPress={sendToServer}
+              disabled={isProcessing}
+              className="rounded-xl p-4 flex-row items-center justify-center gap-2"
+              style={{
+                backgroundColor: isProcessing
+                  ? (colorScheme === 'dark' ? '#3a3a3a' : '#e0e0e0')
+                  : Colors[colorScheme ?? 'light'].tint,
+              }}
+            >
+              {isProcessing ? (
+                <>
+                  <ActivityIndicator color="white" />
+                  <ThemedText className="font-semibold" style={{ color: 'white' }}>
+                    Processing...
+                  </ThemedText>
+                </>
+              ) : (
+                <>
+                  <IconSymbol name="sparkles" size={20} color="white" />
+                  <ThemedText className="font-semibold" style={{ color: 'white' }}>
+                    Process with AI
+                  </ThemedText>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
-    </ThemedView>
+      </ThemedView>
+    </SafeAreaView>
   );
 }

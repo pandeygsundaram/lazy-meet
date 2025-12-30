@@ -6,6 +6,7 @@ import {
   TextInput,
   RefreshControl,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback } from 'react';
 import { ThemedView } from '@/components/themed-view';
@@ -85,9 +86,10 @@ export default function RecordingsScreen() {
   };
 
   return (
-    <ThemedView className="flex-1">
-      {/* Header */}
-      <View className="pt-16 pb-4 px-6">
+    <SafeAreaView style={{ flex: 1, backgroundColor: Colors[colorScheme ?? 'light'].background }} edges={['top', 'left', 'right', 'bottom']}>
+      <ThemedView className="flex-1">
+        {/* Header */}
+        <View className="pb-4 px-6">
         <ThemedText type="title" className="text-3xl mb-2">
           Recordings
         </ThemedText>
@@ -210,6 +212,7 @@ export default function RecordingsScreen() {
           </View>
         )}
       </ScrollView>
-    </ThemedView>
+      </ThemedView>
+    </SafeAreaView>
   );
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Platform } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   useAudioRecorder,
   RecordingPresets,
@@ -13,10 +14,12 @@ import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { saveRecording, updateRecording, generateTitle, type Recording } from '@/utils/storage';
 import { API_ENDPOINTS } from '@/constants/config';
+import { useAuthStore } from '@/store/authStore';
 
 export default function RecordScreen() {
   const colorScheme = useColorScheme();
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const { token } = useAuthStore();
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -201,33 +204,33 @@ export default function RecordScreen() {
         type: 'audio/m4a',
         name: 'recording.m4a',
       } as any);
+      formData.append('duration', duration.toString());
 
-      const response = await fetch(API_ENDPOINTS.TRANSCRIBE, {
+      const response = await fetch(API_ENDPOINTS.UPLOAD, {
         method: 'POST',
         body: formData,
         headers: {
           'Content-Type': 'multipart/form-data',
+          'Authorization': `Bearer ${token}`,
         },
       });
 
       const data = await response.json();
 
       if (data.success) {
-        // Update the existing recording with transcription and summary
+        // Save recording with server ID and status
         await updateRecording(recordingId, {
-          title: generateTitle(data.transcription),
-          summary: data.summary,
-          transcription: data.transcription,
-          audioUrl: data.audioUrl || uri,
+          title: data.recording.title,
+          audioUrl: data.recording.audioUrl,
         });
 
-        console.log('Recording updated with transcription and summary');
+        console.log('Recording uploaded, processing in background on server');
       } else {
-        throw new Error(data.error || 'Failed to process recording');
+        throw new Error(data.error || 'Failed to upload recording');
       }
     } catch (err) {
-      console.error('Failed to process recording', err);
-      // Don't show alert - it's already saved locally
+      console.error('Failed to upload recording', err);
+      // Keep the local recording even if upload fails
     } finally {
       setIsProcessing(false);
     }
@@ -251,13 +254,14 @@ export default function RecordScreen() {
   };
 
   return (
-    <ThemedView className="flex-1">
-      <ScrollView
-        contentContainerStyle={{ flexGrow: 1 }}
-        className="flex-1"
-      >
-        {/* Header */}
-        <View className="pt-16 pb-8 px-6">
+    <SafeAreaView style={{ flex: 1, backgroundColor: Colors[colorScheme ?? 'light'].background }} edges={['top', 'left', 'right', 'bottom']}>
+      <ThemedView className="flex-1">
+        <ScrollView
+          contentContainerStyle={{ flexGrow: 1 }}
+          className="flex-1"
+        >
+          {/* Header */}
+          <View className="pb-8 px-6">
           <ThemedText type="title" className="text-center text-3xl mb-2">
             Voice Recorder
           </ThemedText>
@@ -344,6 +348,7 @@ export default function RecordScreen() {
           </View>
         )}
       </ScrollView>
-    </ThemedView>
+      </ThemedView>
+    </SafeAreaView>
   );
 }
